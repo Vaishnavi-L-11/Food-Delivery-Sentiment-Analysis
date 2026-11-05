@@ -1,0 +1,826 @@
+
+# ================================================================
+# FOOD QUALITY PREDICTION AND CUSTOMER SENTIMENT CLASSIFICATION
+# FOUR INPUTS + FIVE CLASSIFIERS + TWO GRAPHS
+# ================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import warnings
+
+warnings.filterwarnings("ignore")
+
+from sklearn.model_selection import (
+    train_test_split,
+    GridSearchCV,
+    StratifiedKFold
+)
+
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    classification_report,
+    make_scorer
+)
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+
+
+# ================================================================
+# 1. LOAD DATASET
+# ================================================================
+
+df = pd.read_csv(
+    r"C:\Users\lvais\Downloads\food.csv"
+)
+
+print("=" * 65)
+print("FOOD QUALITY PREDICTION SYSTEM")
+print("=" * 65)
+
+required_columns = [
+    "food_temperature",
+    "food_freshness",
+    "packaging_quality",
+    "food_condition",
+    "customer_satisfaction"
+]
+
+missing_columns = [
+    col for col in required_columns
+    if col not in df.columns
+]
+
+if missing_columns:
+    raise ValueError(
+        f"Missing columns: {missing_columns}"
+    )
+
+print("\nDataset loaded successfully!")
+print("Original Dataset Shape:", df.shape)
+
+
+# ================================================================
+# 2. DATA CLEANING
+# ================================================================
+
+df = df.drop_duplicates().copy()
+
+for col in [
+    "customer_satisfaction",
+    "food_freshness",
+    "packaging_quality"
+]:
+    df[col] = pd.to_numeric(
+        df[col],
+        errors="coerce"
+    )
+
+df = df.dropna(
+    subset=required_columns
+).copy()
+
+# Valid customer satisfaction ratings: 0 to 5
+
+df = df[
+    df["customer_satisfaction"].between(0, 5)
+].copy()
+
+if df.empty:
+    raise ValueError(
+        "No valid customer satisfaction records found."
+    )
+
+df["food_temperature"] = (
+    df["food_temperature"]
+    .astype(str)
+    .str.strip()
+    .str.title()
+)
+
+df["food_condition"] = (
+    df["food_condition"]
+    .astype(str)
+    .str.strip()
+    .str.title()
+)
+
+print("\nCleaned Dataset Shape:", df.shape)
+
+
+# ================================================================
+# 3. CREATE CUSTOMER SENTIMENT LABELS
+# ================================================================
+
+# Rating 0-2 = Negative
+# Rating 3   = Neutral
+# Rating 4-5 = Positive
+
+def convert_sentiment(rating):
+
+    if rating <= 2:
+        return "Negative"
+
+    elif rating == 3:
+        return "Neutral"
+
+    else:
+        return "Positive"
+
+
+df["Sentiment"] = df[
+    "customer_satisfaction"
+].apply(convert_sentiment)
+
+print("\nCUSTOMER SENTIMENT DISTRIBUTION")
+
+print(
+    df["Sentiment"].value_counts()
+)
+
+
+# ================================================================
+# 4. GRAPH 1: POSITIVE, NEUTRAL AND NEGATIVE SENTIMENT
+# ================================================================
+
+sentiment_counts = (
+    df["Sentiment"]
+    .value_counts()
+    .reindex(
+        ["Positive", "Neutral", "Negative"],
+        fill_value=0
+    )
+)
+
+plt.figure(figsize=(7, 5))
+
+bars = plt.bar(
+    sentiment_counts.index,
+    sentiment_counts.values
+)
+
+for bar in bars:
+
+    height = bar.get_height()
+
+    plt.text(
+        bar.get_x() + bar.get_width() / 2,
+        height,
+        str(int(height)),
+        ha="center",
+        va="bottom"
+    )
+
+plt.title("Customer Sentiment Distribution")
+
+plt.xlabel("Customer Sentiment")
+
+plt.ylabel("Number of Customers")
+
+plt.tight_layout()
+
+plt.show()
+
+
+# ================================================================
+# 5. SELECT ONLY FOUR INPUT FEATURES
+# ================================================================
+
+features = [
+    "food_temperature",
+    "food_freshness",
+    "packaging_quality",
+    "food_condition"
+]
+
+X = df[features].copy()
+
+y = df["Sentiment"].copy()
+
+
+# ================================================================
+# 6. TRAIN-TEST SPLIT
+# ================================================================
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42,
+    stratify=y
+)
+
+print("\nTraining Records:", len(X_train))
+
+print("Testing Records:", len(X_test))
+
+
+# ================================================================
+# 7. DATA PREPROCESSING
+# ================================================================
+
+try:
+
+    encoder = OneHotEncoder(
+        handle_unknown="ignore",
+        sparse_output=False
+    )
+
+except TypeError:
+
+    encoder = OneHotEncoder(
+        handle_unknown="ignore",
+        sparse=False
+    )
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        (
+            "categorical",
+            encoder,
+            ["food_temperature", "food_condition"]
+        ),
+        (
+            "numerical",
+            StandardScaler(),
+            ["food_freshness", "packaging_quality"]
+        )
+    ],
+    sparse_threshold=0
+)
+
+
+# ================================================================
+# 8. KNN HYPERPARAMETER TUNING
+# ================================================================
+
+# Accuracy, weighted precision and weighted F1 are
+# considered together for choosing KNN parameters.
+
+# In single-label multiclass classification,
+# weighted recall equals accuracy.
+
+def knn_tuning_score(y_true, y_pred):
+
+    accuracy = accuracy_score(
+        y_true,
+        y_pred
+    )
+
+    precision = precision_score(
+        y_true,
+        y_pred,
+        average="weighted",
+        zero_division=0
+    )
+
+    weighted_f1 = f1_score(
+        y_true,
+        y_pred,
+        average="weighted",
+        zero_division=0
+    )
+
+    return (
+        accuracy + precision + weighted_f1
+    ) / 3
+
+
+tuning_scorer = make_scorer(
+    knn_tuning_score
+)
+
+minimum_class_count = int(
+    y_train.value_counts().min()
+)
+
+if minimum_class_count < 2:
+    raise ValueError(
+        "Not enough samples in every sentiment class."
+    )
+
+cv_splits = min(
+    5,
+    minimum_class_count
+)
+
+cv = StratifiedKFold(
+    n_splits=cv_splits,
+    shuffle=True,
+    random_state=42
+)
+
+maximum_neighbors = int(
+    len(X_train) * (cv_splits - 1) / cv_splits
+) - 1
+
+neighbor_values = [
+    k for k in [3, 5, 7, 9, 11, 15, 21, 31]
+    if k <= maximum_neighbors
+]
+
+if not neighbor_values:
+    neighbor_values = [1]
+
+knn_pipeline = Pipeline(
+    steps=[
+        ("preprocessor", preprocessor),
+        ("classifier", KNeighborsClassifier())
+    ]
+)
+
+knn_parameters = {
+
+    "classifier__n_neighbors": neighbor_values,
+
+    "classifier__weights": [
+        "uniform",
+        "distance"
+    ],
+
+    "classifier__p": [
+        1,
+        2
+    ]
+}
+
+print("\n" + "=" * 65)
+print("TUNING KNN CLASSIFIER")
+print("=" * 65)
+
+knn_search = GridSearchCV(
+    estimator=knn_pipeline,
+    param_grid=knn_parameters,
+    scoring=tuning_scorer,
+    cv=cv,
+    n_jobs=-1,
+    refit=True
+)
+
+knn_search.fit(
+    X_train,
+    y_train
+)
+
+best_knn = knn_search.best_estimator_
+
+print("\nBest KNN Parameters:")
+
+print(knn_search.best_params_)
+
+
+# ================================================================
+# 9. DEFINE FIVE CLASSIFIERS
+# ================================================================
+
+classifiers = {
+
+    "KNN": best_knn,
+
+    "Naive Bayes": Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", GaussianNB())
+    ]),
+
+    "SVM": Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", SVC(
+            kernel="rbf",
+            class_weight="balanced"
+        ))
+    ]),
+
+    "Logistic Regression": Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(
+            max_iter=2000,
+            class_weight="balanced",
+            random_state=42
+        ))
+    ]),
+
+    "Random Forest": Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", RandomForestClassifier(
+            n_estimators=200,
+            random_state=42,
+            class_weight="balanced"
+        ))
+    ])
+}
+
+
+# ================================================================
+# 10. TRAIN AND EVALUATE FIVE CLASSIFIERS
+# ================================================================
+
+results = []
+
+trained_models = {}
+
+for name, model in classifiers.items():
+
+    print("\n" + "=" * 60)
+
+    print("TRAINING:", name)
+
+    print("=" * 60)
+
+    # KNN is already fitted through GridSearchCV
+
+    if name != "KNN":
+
+        model.fit(
+            X_train,
+            y_train
+        )
+
+    predictions = model.predict(X_test)
+
+    accuracy = accuracy_score(
+        y_test,
+        predictions
+    ) * 100
+
+    precision = precision_score(
+        y_test,
+        predictions,
+        average="weighted",
+        zero_division=0
+    ) * 100
+
+    recall = recall_score(
+        y_test,
+        predictions,
+        average="weighted",
+        zero_division=0
+    ) * 100
+
+    weighted_f1 = f1_score(
+        y_test,
+        predictions,
+        average="weighted",
+        zero_division=0
+    ) * 100
+
+    results.append({
+
+        "Classifier": name,
+
+        "Accuracy": accuracy,
+
+        "Precision": precision,
+
+        "Recall": recall,
+
+        "Weighted F1": weighted_f1
+    })
+
+    trained_models[name] = model
+
+
+# ================================================================
+# 11. CLASSIFIER PERFORMANCE COMPARISON
+# ================================================================
+
+results_df = pd.DataFrame(results)
+
+print("\n" + "=" * 70)
+
+print("CLASSIFIER PERFORMANCE COMPARISON")
+
+print("=" * 70)
+
+print(
+    results_df.round(2).to_string(index=False)
+)
+
+
+# ================================================================
+# 12. SELECT KNN AS THE PROJECT MODEL
+# ================================================================
+
+# KNN is the selected algorithm for the final
+# customer sentiment prediction in this project.
+#
+# Its actual measured performance is shown in the table.
+
+best_classifier_name = "KNN"
+
+best_model = trained_models["KNN"]
+
+knn_row = results_df[
+    results_df["Classifier"] == "KNN"
+].iloc[0]
+
+print("\n" + "=" * 70)
+
+print("BEST CLASSIFIER SELECTED FOR PROJECT")
+
+print("=" * 70)
+
+print("Selected Best Classifier: KNN")
+
+print(
+    "KNN Accuracy:",
+    round(knn_row["Accuracy"], 2),
+    "%"
+)
+
+print(
+    "KNN Precision:",
+    round(knn_row["Precision"], 2),
+    "%"
+)
+
+print(
+    "KNN Recall:",
+    round(knn_row["Recall"], 2),
+    "%"
+)
+
+print(
+    "KNN Weighted F1:",
+    round(knn_row["Weighted F1"], 2),
+    "%"
+)
+
+
+# ================================================================
+# 13. KNN CLASSIFICATION REPORT
+# ================================================================
+
+knn_predictions = best_model.predict(X_test)
+
+print("\nKNN CLASSIFICATION REPORT")
+
+print(
+    classification_report(
+        y_test,
+        knn_predictions,
+        labels=[
+            "Negative",
+            "Neutral",
+            "Positive"
+        ],
+        zero_division=0
+    )
+)
+
+
+# ================================================================
+# 14. GRAPH 2: FIVE CLASSIFIER PERFORMANCE COMPARISON
+# ================================================================
+
+graph_data = results_df.set_index(
+    "Classifier"
+)[
+    [
+        "Accuracy",
+        "Precision",
+        "Recall",
+        "Weighted F1"
+    ]
+]
+
+graph_data.plot(
+    kind="bar",
+    figsize=(10, 6)
+)
+
+plt.title(
+    "Performance Comparison of Five Classifiers"
+)
+
+plt.xlabel("Classification Algorithms")
+
+plt.ylabel("Performance Score (%)")
+
+plt.ylim(0, 100)
+
+plt.xticks(rotation=15)
+
+plt.legend(
+    title="Evaluation Metrics"
+)
+
+plt.tight_layout()
+
+plt.show()
+
+
+# ================================================================
+# 15. FINAL INPUT SYSTEM - ONLY FOUR INPUTS
+# ================================================================
+
+print("\n" + "=" * 65)
+
+print("CUSTOMER SENTIMENT PREDICTION")
+
+print("=" * 65)
+
+
+# INPUT 1: FOOD TEMPERATURE
+
+print("\n1. FOOD TEMPERATURE")
+
+print("Options: Hot / Warm / Cold")
+
+temperature = input(
+    "Enter food temperature: "
+).strip().title()
+
+while temperature not in [
+    "Hot",
+    "Warm",
+    "Cold"
+]:
+
+    print("Please enter Hot, Warm, or Cold.")
+
+    temperature = input(
+        "Enter food temperature: "
+    ).strip().title()
+
+
+# INPUT 2: FOOD FRESHNESS
+
+print("\n2. FOOD FRESHNESS (1-5)")
+
+while True:
+
+    try:
+
+        freshness = float(
+            input("Enter food freshness: ")
+        )
+
+        if 1 <= freshness <= 5:
+            break
+
+        print("Enter a value between 1 and 5.")
+
+    except ValueError:
+
+        print("Enter a valid number.")
+
+
+# INPUT 3: PACKAGING QUALITY
+
+print("\n3. PACKAGING QUALITY (1-5)")
+
+while True:
+
+    try:
+
+        packaging = float(
+            input("Enter packaging quality: ")
+        )
+
+        if 1 <= packaging <= 5:
+            break
+
+        print("Enter a value between 1 and 5.")
+
+    except ValueError:
+
+        print("Enter a valid number.")
+
+
+# INPUT 4: FOOD CONDITION
+
+print("\n4. FOOD CONDITION")
+
+print("Options: Good / Fair / Poor")
+
+condition = input(
+    "Enter food condition: "
+).strip().title()
+
+while condition not in [
+    "Good",
+    "Fair",
+    "Poor"
+]:
+
+    print("Please enter Good, Fair, or Poor.")
+
+    condition = input(
+        "Enter food condition: "
+    ).strip().title()
+
+
+# ================================================================
+# 16. CREATE NEW FOOD RECORD
+# ================================================================
+
+new_food = pd.DataFrame({
+
+    "food_temperature": [temperature],
+
+    "food_freshness": [freshness],
+
+    "packaging_quality": [packaging],
+
+    "food_condition": [condition]
+
+})
+
+
+# ================================================================
+# 17. PREDICT SENTIMENT USING KNN
+# ================================================================
+
+predicted_sentiment = best_model.predict(
+    new_food
+)[0]
+
+
+# ================================================================
+# 18. CALCULATE OVERALL FOOD QUALITY SCORE
+# ================================================================
+
+temperature_score = {
+    "Hot": 5,
+    "Warm": 3,
+    "Cold": 1
+}
+
+condition_score = {
+    "Good": 5,
+    "Fair": 3,
+    "Poor": 1
+}
+
+quality_values = [
+    temperature_score[temperature],
+    freshness,
+    packaging,
+    condition_score[condition]
+]
+
+overall_quality_score = np.mean(
+    quality_values
+)
+
+
+# ================================================================
+# 19. FINAL FOOD QUALITY PREDICTION
+# ================================================================
+
+print("\n" + "=" * 65)
+
+print("FINAL FOOD QUALITY PREDICTION")
+
+print("=" * 65)
+
+print("\nFood Temperature:", temperature)
+
+print("Food Condition:", condition)
+
+print("Packaging Quality:", packaging)
+
+print("Food Freshness:", freshness)
+
+print(
+    "\nOverall Food Quality Score:",
+    round(overall_quality_score, 2),
+    "/ 5"
+)
+
+print("\nBest Classifier: KNN")
+
+print(
+    "Predicted Customer Sentiment:",
+    predicted_sentiment
+)
+
+if predicted_sentiment == "Positive":
+
+    print("Result: Positive customer sentiment.")
+
+elif predicted_sentiment == "Negative":
+
+    print("Result: Negative customer sentiment.")
+
+else:
+
+    print("Result: Neutral customer sentiment.")
+
+
+print("\n" + "=" * 65)
+
+print("PREDICTION COMPLETED")
+
+print("=" * 65)
