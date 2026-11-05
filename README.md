@@ -127,16 +127,6 @@ food-delivery-sentiment-analysis/
 9. **Best model selection:** choose KNN, which has the highest Weighted F1 Score.
 
 ---
-
-## ▶️ How to Run
-
-```bash
-git clone https://github.com/<your-username>/food-delivery-sentiment-analysis.git
-cd food-delivery-sentiment-analysis
-pip install -r requirements.txt
-jupyter notebook notebooks/sentiment_analysis.ipynb
-```
-
 ---
 
 ## 🚀 Future Enhancements
